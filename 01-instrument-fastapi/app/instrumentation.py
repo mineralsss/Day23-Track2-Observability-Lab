@@ -1,4 +1,4 @@
-"""Prometheus + OTel + structlog wiring.
+"""Prometheus + OTel + structlog + Langfuse wiring.
 
 Single source of truth for the metric/span/log namespace.
 """
@@ -9,13 +9,44 @@ import os
 import sys
 
 import structlog
+from langfuse import Langfuse
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 from prometheus_client import Counter, Gauge, Histogram
+
+# ── Langfuse client ───────────────────────────────────────────
+_langfuse_client = None
+
+
+def get_langfuse():
+    """Get or create Langfuse client singleton. Returns None if not configured."""
+    global _langfuse_client
+    if _langfuse_client is not None:
+        return _langfuse_client
+
+    host = os.getenv("LANGFUSE_HOST")
+    public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+    secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+
+    # Only initialize if all required env vars are set
+    if host and public_key and secret_key:
+        try:
+            _langfuse_client = Langfuse(
+                public_key=public_key,
+                secret_key=secret_key,
+                host=host,
+            )
+        except Exception:
+            _langfuse_client = None
+    else:
+        _langfuse_client = None
+
+    return _langfuse_client
 
 # ── Prometheus metrics ────────────────────────────────────────
 INFERENCE_REQUESTS = Counter(
@@ -63,7 +94,10 @@ def setup_otel() -> None:
             ),
         }
     )
-    provider = TracerProvider(resource=resource)
+    provider = TracerProvider(
+        resource=resource,
+        sampler=ParentBased(TraceIdRatioBased(1.0)),
+    )
     endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4317")
     provider.add_span_processor(
         BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))

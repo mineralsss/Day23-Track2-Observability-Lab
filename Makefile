@@ -12,7 +12,7 @@
 SHELL := /bin/bash
 COMPOSE ?= docker compose
 
-.PHONY: help setup up down restart logs smoke load alert trace drift demo verify clean lint-dashboards
+.PHONY: help setup up down restart logs smoke load alert trace drift demo verify clean lint-dashboards up-langfuse down-langfuse smoke-langfuse logs-langfuse
 
 help:
 	@grep -E '^##|^[a-zA-Z_-]+:.*?## ' Makefile | sed -E 's/^## ?//; s/:.*## /\t/' | column -t -s $$'\t'
@@ -39,7 +39,7 @@ smoke: ## health-check all 7 services
 	@curl -fsS http://localhost:8000/healthz   > /dev/null && echo "  app:           OK"
 	@curl -fsS http://localhost:9090/-/healthy > /dev/null && echo "  prometheus:    OK"
 	@curl -fsS http://localhost:9093/-/healthy > /dev/null && echo "  alertmanager:  OK"
-	@curl -fsS http://localhost:3000/api/health | grep -q '"database":"ok"' && echo "  grafana:       OK"
+	@curl -fsS http://localhost:3000/api/health | grep -q '"database": "ok"' && echo "  grafana:       OK"
 	@curl -fsS http://localhost:3100/ready     > /dev/null && echo "  loki:          OK"
 	@curl -fsS http://localhost:16686/         > /dev/null && echo "  jaeger:        OK"
 	@curl -fsS http://localhost:8888/metrics   > /dev/null && echo "  otel-collector: OK"
@@ -74,3 +74,18 @@ lint-dashboards: ## validate Grafana dashboard JSONs
 
 clean: ## stop stack + remove volumes (DESTRUCTIVE)
 	$(COMPOSE) down -v
+
+# --- Langfuse (BONUS-llm-native-obs) ---
+LANGFUSE_COMPOSE := $(COMPOSE) -f docker-compose.yml -f BONUS-llm-native-obs/docker-compose.langfuse.yml
+
+up-langfuse: ## start Langfuse services
+	$(LANGFUSE_COMPOSE) up -d
+
+down-langfuse: ## stop Langfuse services
+	$(LANGFUSE_COMPOSE) down
+
+smoke-langfuse: ## health-check Langfuse
+	@curl -fsS http://localhost:3001/api/public/health > /dev/null && echo "Langfuse: OK" || echo "Langfuse: FAIL"
+
+logs-langfuse: ## tail Langfuse logs
+	$(LANGFUSE_COMPOSE) logs -f --tail=50

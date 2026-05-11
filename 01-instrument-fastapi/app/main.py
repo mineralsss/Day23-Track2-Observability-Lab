@@ -12,6 +12,7 @@ from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 
+from opentelemetry import trace
 from instrumentation import (
     GPU_UTIL,
     INFERENCE_ACTIVE,
@@ -20,6 +21,7 @@ from instrumentation import (
     INFERENCE_REQUESTS,
     INFERENCE_TOKENS,
     bind_log,
+    get_langfuse,
     setup_otel,
     tracer,
 )
@@ -66,55 +68,87 @@ def metrics() -> Response:
 def predict(req: PredictRequest) -> PredictResponse:
     INFERENCE_ACTIVE.inc()
     start = time.perf_counter()
-    span = tracer.start_span("predict")
-    span.set_attribute("gen_ai.request.model", req.model)
+    langfuse = get_langfuse()
 
-    try:
-        if req.fail:
-            INFERENCE_REQUESTS.labels(model=req.model, status="error").inc()
-            log.error("forced failure", model=req.model)
-            raise HTTPException(status_code=503, detail="forced failure (alert demo)")
+    with tracer.start_as_current_span("POST /predict") as root_span:
+        root_span.set_attribute("gen_ai.request.model", req.model)
 
-        with tracer.start_as_current_span("embed-text") as s:
-            s.set_attribute("text.length", len(req.prompt))
-            time.sleep(0.005)
+        # Create Langfuse trace for this request (if Langfuse is configured)
+        lf_trace = None
+        if langfuse:
+            lf_trace = langfuse.trace(
+                name="predict",
+                input={"prompt": req.prompt, "model": req.model},
+                metadata={"service": "inference-api"},
+            )
 
-        with tracer.start_as_current_span("vector-search") as s:
-            s.set_attribute("k", 5)
-            time.sleep(0.010)
+        try:
+            if req.fail:
+                INFERENCE_REQUESTS.labels(model=req.model, status="error").inc()
+                log.error("forced failure", model=req.model)
+                root_span.set_attribute("error", True)
+                if lf_trace:
+                    lf_trace.update(
+                        output={"error": "forced failure"},
+                        level="ERROR",
+                    )
+                raise HTTPException(status_code=503, detail="forced failure (alert demo)")
 
-        with tracer.start_as_current_span("generate-tokens") as s:
-            text, in_toks, out_toks, quality = simulate_inference(req.prompt, req.model)
-            s.set_attribute("gen_ai.usage.input_tokens", in_toks)
-            s.set_attribute("gen_ai.usage.output_tokens", out_toks)
-            s.set_attribute("gen_ai.response.finish_reason", "stop")
+            with tracer.start_as_current_span("embed-text") as s:
+                s.set_attribute("text.length", len(req.prompt))
+                time.sleep(0.005)
 
-        INFERENCE_REQUESTS.labels(model=req.model, status="ok").inc()
-        INFERENCE_TOKENS.labels(model=req.model, direction="input").inc(in_toks)
-        INFERENCE_TOKENS.labels(model=req.model, direction="output").inc(out_toks)
-        INFERENCE_QUALITY.labels(model=req.model).set(quality)
+            with tracer.start_as_current_span("vector-search") as s:
+                s.set_attribute("k", 5)
+                time.sleep(0.010)
 
-        elapsed = time.perf_counter() - start
-        INFERENCE_LATENCY.labels(model=req.model).observe(elapsed)
+            with tracer.start_as_current_span("generate-tokens") as s:
+                text, in_toks, out_toks, quality = simulate_inference(req.prompt, req.model)
+                s.set_attribute("gen_ai.usage.input_tokens", in_toks)
+                s.set_attribute("gen_ai.usage.output_tokens", out_toks)
+                s.set_attribute("gen_ai.response.finish_reason", "stop")
 
-        trace_id = format(span.get_span_context().trace_id, "032x")
-        log.info(
-            "prediction served",
-            model=req.model,
-            input_tokens=in_toks,
-            output_tokens=out_toks,
-            quality=quality,
-            duration_seconds=round(elapsed, 4),
-            trace_id=trace_id,
-        )
-        return PredictResponse(
-            text=text,
-            model=req.model,
-            input_tokens=in_toks,
-            output_tokens=out_toks,
-            trace_id=trace_id,
-            quality_score=quality,
-        )
-    finally:
-        INFERENCE_ACTIVE.dec()
-        span.end()
+            INFERENCE_REQUESTS.labels(model=req.model, status="ok").inc()
+            INFERENCE_TOKENS.labels(model=req.model, direction="input").inc(in_toks)
+            INFERENCE_TOKENS.labels(model=req.model, direction="output").inc(out_toks)
+            INFERENCE_QUALITY.labels(model=req.model).set(quality)
+
+            elapsed = time.perf_counter() - start
+            INFERENCE_LATENCY.labels(model=req.model).observe(elapsed)
+
+            # Update Langfuse trace with results
+            if lf_trace:
+                lf_trace.update(
+                    output={
+                        "text": text[:500] + "..." if len(text) > 500 else text,
+                        "input_tokens": in_toks,
+                        "output_tokens": out_toks,
+                        "quality_score": quality,
+                        "model": req.model,
+                        "duration_seconds": round(elapsed, 4),
+                    },
+                    metadata={"status": "ok"},
+                )
+
+            trace_id = format(root_span.get_span_context().trace_id, "032x")
+            langfuse_trace_id = lf_trace.id if lf_trace else None
+            log.info(
+                "prediction served",
+                model=req.model,
+                input_tokens=in_toks,
+                output_tokens=out_toks,
+                quality=quality,
+                duration_seconds=round(elapsed, 4),
+                trace_id=trace_id,
+                langfuse_trace_id=langfuse_trace_id,
+            )
+            return PredictResponse(
+                text=text,
+                model=req.model,
+                input_tokens=in_toks,
+                output_tokens=out_toks,
+                trace_id=trace_id,
+                quality_score=quality,
+            )
+        finally:
+            INFERENCE_ACTIVE.dec()

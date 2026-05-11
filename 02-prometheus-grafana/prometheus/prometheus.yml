@@ -26,6 +26,10 @@ scrape_configs:
   - job_name: 'otel-collector'
     static_configs:
       - targets: ['otel-collector:8888']
+  
+  - job_name: 'day19-stub'                                                                         
+    static_configs:
+      - targets: ['host.docker.internal:9101'] 
 
   # Day 19 vector-store integration (optional, see §05)
   # Uncomment + set DAY19_QDRANT_URL in .env

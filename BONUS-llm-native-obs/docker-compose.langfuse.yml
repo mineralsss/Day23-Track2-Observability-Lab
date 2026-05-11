@@ -1,0 +1,47 @@
+## BONUS-llm-native-obs — Self-hosted Langfuse for LLM observability
+## Usage:
+##   docker compose -f docker-compose.yml -f BONUS-llm-native-obs/docker-compose.langfuse.yml up -d
+##   or: make up-langfuse
+##
+## Access Langfuse UI at: http://localhost:3001
+## PostgreSQL persists to: langfuse-db-data volume
+
+services:
+  langfuse-postgres:
+    image: postgres:15-alpine
+    container_name: day23-langfuse-postgres
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:-langfuse}
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "127.0.0.1:5433:5432"
+    networks: [obs]
+
+  langfuse-server:
+    image: langfuse/langfuse:2.44.0
+    container_name: day23-langfuse
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://langfuse:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-postgres:5432/langfuse
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-change-me-to-a-long-random-string}
+      NEXTAUTH_URL: http://localhost:3001
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
+      SALT: ${LANGFUSE_SALT:-another-long-random-salt-here}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-cdc043dad752755d775db24f5f3aacd6494193b3d1ea7e2d51900662df1636bb}
+    ports:
+      - "127.0.0.1:3001:3000"
+
+    networks: [obs]
+
+volumes:
+  langfuse-db-data:

@@ -25,7 +25,7 @@ processors:
 
   # Composite tail-sampling: keep all errors + slow + 1% healthy
   tail_sampling:
-    decision_wait: 30s
+    decision_wait: 5s
     num_traces: 50000
     expected_new_traces_per_sec: 100
     policies:
@@ -37,7 +37,7 @@ processors:
         latency: { threshold_ms: 2000 }
       - name: probabilistic-1pct
         type: probabilistic
-        probabilistic: { sampling_percentage: 1 }
+        probabilistic: { sampling_percentage: 50 }
 
   # Add deployment env to every span/metric resource attribute
   resource:
@@ -47,9 +47,9 @@ processors:
         action: upsert
 
 exporters:
-  # Traces → Jaeger via OTLP
+  # Traces → Jaeger via OTLP (Jaeger listens on 14250 for OTLP gRPC)
   otlp/jaeger:
-    endpoint: jaeger:4317
+    endpoint: jaeger:14250
     tls:
       insecure: true
 

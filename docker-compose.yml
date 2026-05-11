@@ -15,6 +15,11 @@ services:
       OTEL_SERVICE_NAME: inference-api
       OTEL_RESOURCE_ATTRIBUTES: deployment.environment=lab,service.namespace=aicb
       LOG_LEVEL: INFO
+      # Langfuse (BONUS-llm-native-obs) - optional, app works without it
+      # Get keys from Langfuse UI: Settings > API Keys after signing up
+      LANGFUSE_HOST: http://day23-langfuse:3000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
     depends_on:
       otel-collector:
         condition: service_started
@@ -87,6 +92,11 @@ services:
     volumes:
       - ./03-tracing-and-logs/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
     command: -config.file=/etc/loki/local-config.yaml
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     networks: [obs]
 
   jaeger:
